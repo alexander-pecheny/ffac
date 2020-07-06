@@ -96,7 +96,7 @@ def build_subprocess_args(args, source_file, target_file):
     elif args.bitrate:
         result.extend(["-b:a", args.bitrate])
     if args.resample:
-        result.extend(["-af", f"aresample={args.bitrate}"])
+        result.extend(["-af", f"aresample={args.resample}"])
     result.append(target_file)
     return result
 
