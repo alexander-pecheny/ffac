@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import sys
 import os
+import io
 import argparse
 import subprocess
 import shutil
@@ -9,6 +10,7 @@ import base64
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import tqdm
+import mutagen.mp4
 import mutagen.flac
 import mutagen.oggvorbis
 import mutagen.oggopus
@@ -41,17 +43,23 @@ mode_to_bpp = {
 }
 
 
-def picture_from_file(path):
-    ext = os.path.splitext(path)[1][1:]
-    with open(path, "rb") as h:
-        data = h.read()
+def picture_from_file(path, ext_bytes=None):
+    ext = get_extension(path)
+    if ext_bytes:
+        data = ext_bytes
+    else:
+        with open(path, "rb") as h:
+            data = h.read()
 
     picture = mutagen.flac.Picture()
     picture.data = data
     picture.type = 3
     picture.desc = "Front cover"
     picture.mime = f"image/{ext}"
-    img = PIL.Image.open(path)
+    if ext_bytes:
+        img = PIL.Image.open(io.BytesIO(data))
+    else:
+        img = PIL.Image.open(path)
     picture.width = img.width
     picture.height = img.height
     picture.depth = mode_to_bpp[img.mode]
@@ -79,31 +87,37 @@ def search_for_picture(dirname):
                 return picture_from_file(path)
 
 
-def transfer_image(source_file, target_file):
+def transfer_image(args, source_file, target_file):
     picture = None
     if source_file.endswith(".flac"):
         fl = mutagen.flac.FLAC(source_file)
         if fl.pictures:
-            print("picture found!")
             picture = fl.pictures[0]
+    elif source_file.endswith(".m4a"):
+        m = mutagen.mp4.MP4(source_file)
+        if m.get("covr"):
+            cover = m["covr"][0]
+            fake_filename = "cover.{}".format("png" if cover.imageformat == 14 else "jpeg")
+            picture = picture_from_file(fake_filename, ext_bytes=bytes(cover))
     if not picture:
         picture = search_for_picture(os.path.dirname(source_file))
     if picture and target_file.endswith((".ogg", ".oga", ".opus")):
         add_picture_to_ogg(target_file, picture)
-        print("picture transferred!")
+    if target_file.endswith(".oga") and args.output_format == "ogg":
+        shutil.move(target_file, target_file[:-1] + "g")
 
 
 def process_file(args, source_file, target_file):
     sp_kwargs = {}
     sp_kwargs["capture_output"] = True
     sp_kwargs["check"] = True
-    sp_args = build_subprocess_args(args, args.source, target_file)
+    sp_args = build_subprocess_args(args, source_file, target_file)
     try:
         subprocess.run(sp_args, **sp_kwargs)
     except subprocess.CalledProcessError as e:
         raise Exception(f"ffmpeg failed, stderr: {e.stderr}")
     if args.output_format in ("ogg", "oga", "opus"):
-        transfer_image(source_file, target_file)
+        transfer_image(args, source_file, target_file)
 
 
 def load_config(args, json_path):
@@ -220,8 +234,8 @@ def main():
         message += f" using {args.processes} concurrent processes..."
     print(message)
     if single_file_mode:
-        target_name = os.path.splitext(args.source)[0] + get_target_extension(args)
-        process_file(args, args.source, target_name)
+        target_file = os.path.splitext(args.source)[0] + get_target_extension(args)
+        process_file(args, args.source, target_file)
         sys.exit(0)
     for (root, _, files) in os.walk(args.source):
         to_convert = [
@@ -235,16 +249,17 @@ def main():
             continue
         for f in to_convert:
             target_extension = get_target_extension(args)
-            target_name = os.path.join(
+            source_file = os.path.join(root, f)
+            target_file = os.path.join(
                 root, os.path.splitext(f)[0] + target_extension
             ).replace(args.source, output_root_folder, 1)
-            if os.path.exists(target_name):
+            if os.path.exists(target_file):
                 continue
             try:
-                os.makedirs(os.path.dirname(target_name))
+                os.makedirs(os.path.dirname(target_file))
             except FileExistsError:
                 pass
-            futures.append(executor.submit(process_file, args.source, target_name))
+            futures.append(executor.submit(process_file, args, source_file, target_file))
         for f in to_copy:
             target_dir = root.replace(args.source, output_root_folder, 1)
             try:
