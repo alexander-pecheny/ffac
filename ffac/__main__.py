@@ -5,9 +5,15 @@ import os
 import argparse
 import subprocess
 import shutil
+import base64
 import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import tqdm
+import mutagen.flac
+import mutagen.oggvorbis
+import mutagen.oggopus
+import mutagen
+import PIL.Image
 
 
 FOLDER_ENDINGS = ("/", "\\")
@@ -15,20 +21,89 @@ BAD_FILE_STARTS = (".", "~", "_")
 
 
 def generate_folder_name(args):
-    folder = args.folder
+    folder = args.source
     while folder.endswith(FOLDER_ENDINGS):
         folder = folder[:-1]
     folder += f" [{args.output_format.upper()}]"
     return folder
 
 
-def call_wrapper(*args, **kwargs):
-    kwargs["capture_output"] = True
-    kwargs["check"] = True
+mode_to_bpp = {
+    "1": 1,
+    "L": 8,
+    "P": 8,
+    "RGB": 24,
+    "RGBA": 32,
+    "CMYK": 32,
+    "YCbCr": 24,
+    "I": 32,
+    "F": 32,
+}
+
+
+def picture_from_file(path):
+    ext = os.path.splitext(path)[1][1:]
+    with open(path, "rb") as h:
+        data = h.read()
+
+    picture = mutagen.flac.Picture()
+    picture.data = data
+    picture.type = 3
+    picture.desc = "Front cover"
+    picture.mime = f"image/{ext}"
+    img = PIL.Image.open(path)
+    picture.width = img.width
+    picture.height = img.height
+    picture.depth = mode_to_bpp[img.mode]
+    return picture
+
+
+def add_picture_to_ogg(filename, picture):
+    file_ = (
+        mutagen.oggvorbis.OggVorbis(filename)
+        if filename.endswith((".ogg", ".oga"))
+        else mutagen.oggopus.OggOpus(filename)
+    )
+    picture_data = picture.write()
+    encoded_data = base64.b64encode(picture_data)
+    vcomment_value = encoded_data.decode("ascii")
+    file_["metadata_block_picture"] = [vcomment_value]
+    file_.save()
+
+
+def search_for_picture(dirname):
+    for bn in ("cover", "folder"):
+        for ext in ("jpg", "jpeg", "png"):
+            path = os.path.join(dirname, f"{bn}.{ext}")
+            if os.path.isfile(path):
+                return picture_from_file(path)
+
+
+def transfer_image(source_file, target_file):
+    picture = None
+    if source_file.endswith(".flac"):
+        fl = mutagen.flac.FLAC(source_file)
+        if fl.pictures:
+            print("picture found!")
+            picture = fl.pictures[0]
+    if not picture:
+        picture = search_for_picture(os.path.dirname(source_file))
+    if picture and target_file.endswith((".ogg", ".oga", ".opus")):
+        add_picture_to_ogg(target_file, picture)
+        print("picture transferred!")
+
+
+def process_file(args, source_file, target_file):
+    sp_kwargs = {}
+    sp_kwargs["capture_output"] = True
+    sp_kwargs["check"] = True
+    sp_args = build_subprocess_args(args, args.source, target_file)
     try:
-        return subprocess.run(*args, **kwargs)
+        subprocess.run(sp_args, **sp_kwargs)
     except subprocess.CalledProcessError as e:
         raise Exception(f"ffmpeg failed, stderr: {e.stderr}")
+    if args.output_format in ("ogg", "oga", "opus"):
+        transfer_image(source_file, target_file)
 
 
 def load_config(args, json_path):
@@ -61,13 +136,9 @@ def load_defaults(args):
     while args.output_format.startswith("."):
         args.output_format = args.output_format[1:]
     if args.quality is None:
-        args.quality = {
-            "mp3": "2",
-            "aac": "3",
-            "m4a": "3",
-            "ogg": "5",
-            "oga": "5",
-        }.get(args.output_format)
+        args.quality = {"mp3": "2", "aac": "3", "m4a": "3", "ogg": "5", "oga": "5"}.get(
+            args.output_format
+        )
     if args.bitrate is None and args.output_format == "opus":
         args.bitrate = "140K"
 
@@ -107,14 +178,13 @@ def get_extension(filepath):
 
 def get_target_extension(args):
     return "." + (
-        {"aac": "m4a", "ogg": "oga"}.get(args.output_format)
-        or args.output_format
+        {"aac": "m4a", "ogg": "oga"}.get(args.output_format) or args.output_format
     )
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("folder")
+    parser.add_argument("source")
     parser.add_argument(
         "--input_formats", "-i", help="comma-separated input extensions list"
     )
@@ -125,44 +195,35 @@ def main():
         "-cf",
         help="comma-separated list of file extensions to be copied without processing",
     )
-    parser.add_argument(
-        "--quality", "-q", help="format-specific quality setting (q:a)"
-    )
+    parser.add_argument("--quality", "-q", help="format-specific quality setting (q:a)")
     parser.add_argument(
         "--bitrate", "-b", help="output bitrate. Incompatible with --quality"
     )
     parser.add_argument("--no-images", "-ni", help="suppress embedding images")
     parser.add_argument("--processes", "-p", help="number of processes to use")
-    parser.add_argument(
-        "--resample", "-r", help="resample to specified sample rate"
-    )
+    parser.add_argument("--resample", "-r", help="resample to specified sample rate")
     args = parser.parse_args()
     load_defaults(args)
 
-    args.folder = os.path.abspath(args.folder)
-    while args.folder.endswith(FOLDER_ENDINGS):
-        args.folder = args.folder[:-1]
+    args.source = os.path.abspath(args.source)
+    while args.source.endswith(FOLDER_ENDINGS):
+        args.source = args.source[:-1]
     output_root_folder = generate_folder_name(args)
     if os.path.isfile(output_root_folder):
         print("Please delete the file {}".format(output_root_folder))
         sys.exit(1)
     executor = ProcessPoolExecutor(max_workers=args.processes)
     futures = []
-    single_file_mode = os.path.isfile(args.folder)
-    message = f"converting {args.folder} to {args.output_format}"
+    single_file_mode = os.path.isfile(args.source)
+    message = f"converting {args.source} to {args.output_format}"
     if not single_file_mode:
         message += f" using {args.processes} concurrent processes..."
     print(message)
     if single_file_mode:
-        target_name = os.path.splitext(args.folder)[0] + get_target_extension(
-            args
-        )
-        subprocess_args = build_subprocess_args(
-            args, args.folder, target_name
-        )
-        call_wrapper(subprocess_args)
+        target_name = os.path.splitext(args.source)[0] + get_target_extension(args)
+        process_file(args, args.source, target_name)
         sys.exit(0)
-    for (root, _, files) in os.walk(args.folder):
+    for (root, _, files) in os.walk(args.source):
         to_convert = [
             x
             for x in files
@@ -176,19 +237,16 @@ def main():
             target_extension = get_target_extension(args)
             target_name = os.path.join(
                 root, os.path.splitext(f)[0] + target_extension
-            ).replace(args.folder, output_root_folder, 1)
+            ).replace(args.source, output_root_folder, 1)
             if os.path.exists(target_name):
                 continue
             try:
                 os.makedirs(os.path.dirname(target_name))
             except FileExistsError:
                 pass
-            subprocess_args = build_subprocess_args(
-                args, os.path.join(root, f), target_name
-            )
-            futures.append(executor.submit(call_wrapper, subprocess_args))
+            futures.append(executor.submit(process_file, args.source, target_name))
         for f in to_copy:
-            target_dir = root.replace(args.folder, output_root_folder, 1)
+            target_dir = root.replace(args.source, output_root_folder, 1)
             try:
                 os.makedirs(target_dir)
             except FileExistsError:
