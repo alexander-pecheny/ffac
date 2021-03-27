@@ -65,11 +65,11 @@ def load_defaults(args):
             "mp3": "2",
             "aac": "3",
             "m4a": "3",
-            "ogg": "6",
-            "oga": "6",
+            "ogg": "5",
+            "oga": "5",
         }.get(args.output_format)
     if args.bitrate is None and args.output_format == "opus":
-        args.bitrate = "180K"
+        args.bitrate = "140K"
 
 
 def get_codec_args(args):
