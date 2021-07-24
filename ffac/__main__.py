@@ -150,11 +150,11 @@ def load_defaults(args):
     while args.output_format.startswith("."):
         args.output_format = args.output_format[1:]
     if args.quality is None:
-        args.quality = {"mp3": "2", "aac": "3", "m4a": "3", "ogg": "5", "oga": "5"}.get(
+        args.quality = {"mp3": "2", "aac": "4", "m4a": "3", "ogg": "5", "oga": "5"}.get(
             args.output_format
         )
     if args.bitrate is None and args.output_format == "opus":
-        args.bitrate = "140K"
+        args.bitrate = "160K"
 
 
 def get_codec_args(args):
@@ -194,6 +194,14 @@ def get_target_extension(args):
     return "." + (
         {"aac": "m4a", "ogg": "oga"}.get(args.output_format) or args.output_format
     )
+
+
+def check_exists(target_file):
+    if target_file.endswith((".oga", ".ogg")):
+        basename = os.path.splitext(target_file)[0]
+        return os.path.exists(f"{basename}.oga") or os.path.exists(f"{basename}.ogg")
+    else:
+        return os.path.exists(target_file)
 
 
 def main():
@@ -253,7 +261,7 @@ def main():
             target_file = os.path.join(
                 root, os.path.splitext(f)[0] + target_extension
             ).replace(args.source, output_root_folder, 1)
-            if os.path.exists(target_file):
+            if check_exists(target_file):
                 continue
             try:
                 os.makedirs(os.path.dirname(target_file))
