@@ -115,7 +115,7 @@ def process_file(args, source_file, target_file):
     try:
         subprocess.run(sp_args, **sp_kwargs)
     except subprocess.CalledProcessError as e:
-        raise Exception(f"ffmpeg failed, stderr: {e.stderr}")
+        raise Exception(f"called process failed, stderr: {e.stderr}")
     if args.output_format in ("ogg", "oga", "opus"):
         transfer_image(args, source_file, target_file)
 
@@ -172,18 +172,21 @@ def get_codec_args(args):
 
 
 def build_subprocess_args(args, source_file, target_file):
-    result = ["ffmpeg", "-i", source_file]
-    if not args.no_images:
-        result.extend(["-c:v", "copy"])
-    result.extend(get_codec_args(args))
-    if args.quality:
-        result.extend(["-q:a", args.quality])
-    elif args.bitrate:
-        result.extend(["-b:a", args.bitrate])
-    if args.resample:
-        result.extend(["-af", f"aresample={args.resample}"])
-    result.append(target_file)
-    return result
+    if args.output_format == "aac":
+        return ["XLD", "-f", "aac", source_file, "-o", target_file]
+    else:
+        result = ["ffmpeg", "-i", source_file]
+        if not args.no_images:
+            result.extend(["-c:v", "copy"])
+        result.extend(get_codec_args(args))
+        if args.quality:
+            result.extend(["-q:a", args.quality])
+        elif args.bitrate:
+            result.extend(["-b:a", args.bitrate])
+        if args.resample:
+            result.extend(["-af", f"aresample={args.resample}"])
+        result.append(target_file)
+        return result
 
 
 def get_extension(filepath):
