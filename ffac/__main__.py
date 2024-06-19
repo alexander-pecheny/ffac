@@ -174,6 +174,8 @@ def get_codec_args(args):
 def build_subprocess_args(args, source_file, target_file):
     if args.output_format == "aac":
         return ["XLD", "-f", "aac", source_file, "-o", target_file]
+    elif args.output_format == "alac":
+        return ["XLD", "-f", "alac", source_file, "-o", target_file]
     else:
         result = ["ffmpeg", "-i", source_file]
         if not args.no_images:
@@ -195,7 +197,7 @@ def get_extension(filepath):
 
 def get_target_extension(args):
     return "." + (
-        {"aac": "m4a", "ogg": "oga"}.get(args.output_format) or args.output_format
+        {"aac": "m4a", "ogg": "oga", "alac": "m4a"}.get(args.output_format) or args.output_format
     )
 
 
