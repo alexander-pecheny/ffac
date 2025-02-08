@@ -115,7 +115,11 @@ def process_file(args, source_file, target_file):
     try:
         subprocess.run(sp_args, **sp_kwargs)
     except subprocess.CalledProcessError as e:
-        raise Exception(f"called process failed, stderr: {e.stderr}")
+        stderr = e.stderr.decode("utf8", errors="replace")
+        if "error: cannot decode" in stderr:
+            pass
+        else:
+            raise Exception(f"called process failed, stderr: {stderr}")
     if args.output_format in ("ogg", "oga", "opus"):
         transfer_image(args, source_file, target_file)
 
