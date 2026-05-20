@@ -8,7 +8,7 @@ import subprocess
 import shutil
 import base64
 import json
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import tqdm
 import mutagen.mp4
 import mutagen.flac
@@ -17,6 +17,7 @@ import mutagen.oggopus
 import mutagen
 import PIL.Image
 
+from ffac.gapless import write_aac_gapless_metadata
 
 FOLDER_ENDINGS = ("/", "\\")
 BAD_FILE_STARTS = (".", "~", "_")
@@ -120,6 +121,10 @@ def process_file(args, source_file, target_file):
             pass
         else:
             raise Exception(f"called process failed, stderr: {stderr}")
+    if args.output_format in ("aac", "m4a"):
+        write_aac_gapless_metadata(
+            source_file, target_file, debug=getattr(args, "debug", False)
+        )
     if args.output_format in ("ogg", "oga", "opus"):
         transfer_image(args, source_file, target_file)
 
@@ -153,7 +158,7 @@ def load_defaults(args):
         args.processes = int(args.processes)
     while args.output_format.startswith("."):
         args.output_format = args.output_format[1:]
-    if args.quality is None:
+    if args.quality is None and args.bitrate is None:
         args.quality = {"mp3": "2", "aac": "4", "m4a": "3", "ogg": "5", "oga": "5"}.get(
             args.output_format
         )
@@ -172,27 +177,26 @@ def get_codec_args(args):
         return ["-c:a", "libvorbis"]
     if of == "opus":
         return ["-c:a", "libopus"]
+    if of == "alac":
+        return ["-c:a", "alac"]
     return []
 
 
 def build_subprocess_args(args, source_file, target_file):
-    if args.output_format == "aac":
-        return ["XLD", "-f", "aac", source_file, "-o", target_file]
-    elif args.output_format == "alac":
-        return ["XLD", "-f", "alac", source_file, "-o", target_file]
-    else:
-        result = ["ffmpeg", "-i", source_file]
-        if not args.no_images:
-            result.extend(["-c:v", "copy"])
-        result.extend(get_codec_args(args))
-        if args.quality:
-            result.extend(["-q:a", args.quality])
-        elif args.bitrate:
-            result.extend(["-b:a", args.bitrate])
-        if args.resample:
-            result.extend(["-af", f"aresample={args.resample}"])
-        result.append(target_file)
-        return result
+    result = ["ffmpeg", "-i", source_file]
+    if not args.no_images:
+        result.extend(["-c:v", "copy"])
+    result.extend(get_codec_args(args))
+    if args.bitrate:
+        result.extend(["-b:a", args.bitrate])
+    elif args.quality:
+        result.extend(["-q:a", args.quality])
+    if args.resample:
+        result.extend(["-af", f"aresample={args.resample}"])
+    if args.output_format == "alac":
+        result.extend(["-movflags", "+faststart"])
+    result.append(target_file)
+    return result
 
 
 def get_extension(filepath):
@@ -243,12 +247,12 @@ def main():
     if os.path.isfile(output_root_folder):
         print("Please delete the file {}".format(output_root_folder))
         sys.exit(1)
-    executor = ProcessPoolExecutor(max_workers=args.processes)
+    executor = ThreadPoolExecutor(max_workers=args.processes)
     futures = []
     single_file_mode = os.path.isfile(args.source)
     message = f"converting {args.source} to {args.output_format}"
     if not single_file_mode:
-        message += f" using {args.processes} concurrent processes..."
+        message += f" using {args.processes} concurrent workers..."
     print(message)
     if single_file_mode:
         target_file = os.path.splitext(args.source)[0] + get_target_extension(args)
