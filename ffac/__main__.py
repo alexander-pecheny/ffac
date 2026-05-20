@@ -114,6 +114,8 @@ def process_file(args, source_file, target_file):
     sp_kwargs["check"] = True
     sp_args = build_subprocess_args(args, source_file, target_file)
     try:
+        if args.debug:
+            print(sp_args)
         subprocess.run(sp_args, **sp_kwargs)
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode("utf8", errors="replace")
@@ -237,6 +239,7 @@ def main():
     parser.add_argument("--no-images", "-ni", help="suppress embedding images")
     parser.add_argument("--processes", "-p", help="number of processes to use")
     parser.add_argument("--resample", "-r", help="resample to specified sample rate")
+    parser.add_argument("--debug", "-d", action="store_true")
     args = parser.parse_args()
     load_defaults(args)
 
