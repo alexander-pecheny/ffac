@@ -30,5 +30,5 @@ setup(
     ],
     packages=["ffac"],
     entry_points={"console_scripts": ["ffac = ffac.__main__:main"]},
-    install_requires=["tqdm"],
+    install_requires=["mutagen", "Pillow", "tqdm"],
 )
